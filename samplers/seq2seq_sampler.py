@@ -63,27 +63,28 @@ class Seq2SeqSampler(Sampler):
         policy = self.policy
 
         # initial reset of envs
-        obses = self.env.reset()
+        obses, adjs = self.env.reset()
 
         while n_samples < self.total_samples:
             # execute policy
             t = time.time()
             obs_per_task = np.array(obses)
-
-            actions, logits, values = policy.get_actions(obs_per_task)
+            adjs_per_task = np.array(adjs)
+            actions, logits, values = policy.get_actions(obs_per_task, adjs_per_task)
             policy_time += time.time() - t
 
             # step environments
             t = time.time()
-            next_obses, rewards, dones, env_infos = self.env.step(actions)
+            next_obses, next_adjs, rewards, dones, env_infos = self.env.step(actions)
 
             env_time += time.time() - t
 
             #  stack agent_infos and if no infos were provided (--> None) create empty dicts
             new_samples = 0
-            for observation, action, logit, reward, value, finish_time in zip(obses, actions, logits,
+            for observation, adj, action, logit, reward, value, finish_time in zip(obses, adjs, actions, logits,
                                                                        rewards, values, env_infos):
                 running_paths["observations"] = observation
+                running_paths["adjs"] = adj
                 running_paths["actions"] = action
                 running_paths["logits"] = logit
                 running_paths["rewards"] = reward
@@ -93,6 +94,7 @@ class Seq2SeqSampler(Sampler):
 
                 paths.append(dict(
                     observations=np.squeeze(np.asarray(running_paths["observations"])),
+                    adjs=np.squeeze(np.asarray(running_paths["adjs"])),
                     actions=np.squeeze(np.asarray(running_paths["actions"])),
                     logits=np.squeeze(np.asarray(running_paths["logits"])),
                     rewards=np.squeeze(np.asarray(running_paths["rewards"])),

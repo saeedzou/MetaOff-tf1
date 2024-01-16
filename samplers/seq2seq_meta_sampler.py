@@ -81,22 +81,22 @@ class Seq2SeqMetaSampler(Sampler):
         policy = self.policy
 
         # initial reset of envs
-        obses = self.vec_env.reset()
-
+        obses, adjs = self.vec_env.reset()
         while n_samples < self.total_samples:
             # execute policy
             t = time.time()
             # obs_per_task = np.split(np.asarray(obses), self.meta_batch_size)
             obs_per_task = np.array(obses)
+            adjs_per_task = np.array(adjs)
 
-            actions, logits, values = policy.get_actions(obs_per_task)
+            actions, logits, values = policy.get_actions(obs_per_task, adjs_per_task)
             policy_time += time.time() - t
 
             # step environments
             t = time.time()
             # actions = np.concatenate(actions)
 
-            next_obses, rewards, dones, env_infos = self.vec_env.step(actions)
+            next_obses, next_adjs, rewards, dones, env_infos = self.vec_env.step(actions)
 
             # print("rewards shape is: ", np.array(rewards).shape)
             # print("finish time shape is: ", np.array(env_infos).shape)
@@ -106,14 +106,15 @@ class Seq2SeqMetaSampler(Sampler):
 
             #  stack agent_infos and if no infos were provided (--> None) create empty dicts
             new_samples = 0
-            for idx, observation, action, logit, reward, value, done, task_finish_times in zip(itertools.count(), obses, actions, logits,
+            for idx, observation, adj, action, logit, reward, value, done, task_finish_times in zip(itertools.count(), obses, adjs, actions, logits,
                                                                                     rewards, values, dones, env_infos):
                 # append new samples to running paths
 
                 # handling
-                for single_ob, single_ac, single_logit, single_reward, single_value, single_task_finish_time \
-                        in zip(observation, action, logit, reward, value, task_finish_times):
+                for single_ob, single_adj, single_ac, single_logit, single_reward, single_value, single_task_finish_time \
+                        in zip(observation, adj, action, logit, reward, value, task_finish_times):
                     running_paths[idx]["observations"]= single_ob
+                    running_paths[idx]["adjs"] = single_adj
                     running_paths[idx]["actions"] = single_ac
                     running_paths[idx]["logits"] = single_logit
                     running_paths[idx]["rewards"] = single_reward
@@ -122,6 +123,7 @@ class Seq2SeqMetaSampler(Sampler):
 
                     paths[idx // self.envs_per_task].append(dict(
                         observations=np.squeeze(np.asarray(running_paths[idx]["observations"])),
+                        adjs=np.squeeze(np.asarray(running_paths[idx]["adjs"])),
                         actions=np.squeeze(np.asarray(running_paths[idx]["actions"])),
                         logits = np.squeeze(np.asarray(running_paths[idx]["logits"])),
                         rewards=np.squeeze(np.asarray(running_paths[idx]["rewards"])),
@@ -145,8 +147,7 @@ class Seq2SeqMetaSampler(Sampler):
         return paths
 
 def _get_empty_running_paths_dict():
-    return dict(observations=[], actions=[], logits=[], rewards=[])
-
+    return dict(observations=[], adjs=[], actions=[], logits=[], rewards=[])
 
 
 

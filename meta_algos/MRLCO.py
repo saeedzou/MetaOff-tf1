@@ -38,6 +38,7 @@ class MRLCO():
         self.old_logits = []
         self.actions = []
         self.obs = []
+        self.adjs = []
         self.vpred = []
         self.decoder_full_length = []
 
@@ -60,6 +61,7 @@ class MRLCO():
             self.old_logits.append(tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, None, self.policy.action_dim], name='old_logits_ph_task_'+str(i)))
             self.actions.append(self.policy.meta_policies[i].decoder_targets)
             self.obs.append(self.policy.meta_policies[i].obs)
+            self.adjs.append(self.policy.meta_policies[i].adjs)
             self.vpred.append(self.policy.meta_policies[i].vf)
             self.decoder_full_length.append(self.policy.meta_policies[i].decoder_full_length)
 
@@ -156,6 +158,7 @@ class MRLCO():
                     (np.zeros(task_samples['actions'].shape[0], dtype=np.int32), task_samples['actions'][:, 0:-1]))
 
         observations_batchs = np.split(np.array(task_samples['observations']), batch_number)
+        adjs_batchs = np.split(np.array(task_samples['adjs']), batch_number)
         actions_batchs = np.split(np.array(task_samples['actions']), batch_number)
         shift_action_batchs = np.split(np.array(shift_actions), batch_number)
 
@@ -171,11 +174,11 @@ class MRLCO():
         # copy_policy.set_weights(self.policy.get_weights())
         for i in range(self.num_inner_grad_steps):
             # action, old_logits, _ = copy_policy(observations)
-            for old_logits, old_v, observations, actions, shift_actions, advs, r in zip(old_logits_batchs, oldvpred, observations_batchs, actions_batchs,
+            for old_logits, old_v, observations, adjs, actions, shift_actions, advs, r in zip(old_logits_batchs, oldvpred, observations_batchs, adjs_batchs, actions_batchs,
                                                                                         shift_action_batchs, advs_batchs, returns):
                 decoder_full_length = np.array([observations.shape[1]] * observations.shape[0], dtype=np.int32)
 
-                feed_dict = {self.old_logits[task_id]: old_logits, self.old_v[task_id]: old_v, self.obs[task_id]: observations, self.actions[task_id]: actions,
+                feed_dict = {self.old_logits[task_id]: old_logits, self.old_v[task_id]: old_v, self.obs[task_id]: observations, self.adjs[task_id]:adjs, self.actions[task_id]: actions,
                             self.decoder_inputs[task_id]: shift_actions,
                              self.decoder_full_length[task_id]: decoder_full_length, self.advs[task_id]: advs, self.r[task_id]: r}
 

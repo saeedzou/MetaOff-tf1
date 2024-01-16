@@ -63,7 +63,7 @@ class Seq2SeqMetaSamplerProcessor(SampleProcessor):
         # 3) compute advantages and adjusted rewards
         paths = self._compute_advantages(paths, all_path_baselines)
 
-        observations, actions, logits, rewards, returns, values, advantages, finish_time = self._append_path_data(paths)
+        observations, adjs, actions, logits, rewards, returns, values, advantages, finish_time = self._append_path_data(paths)
 
         decoder_full_lengths = np.array(observations.shape[0] * [observations.shape[1]])
         # 5) if desired normalize / shift advantages
@@ -75,6 +75,7 @@ class Seq2SeqMetaSamplerProcessor(SampleProcessor):
         # 6) create samples_data object
         samples_data = dict(
             observations=observations,
+            adjs=adjs,
             decoder_full_lengths=decoder_full_lengths,
             actions=actions,
             logits=logits,
@@ -89,6 +90,7 @@ class Seq2SeqMetaSamplerProcessor(SampleProcessor):
 
     def _append_path_data(self, paths):
         observations = np.array([path["observations"] for path in paths])
+        adjs = np.array([path["adjs"] for path in paths])
         actions = np.array([path["actions"] for path in paths])
         logits = np.array([path["logits"] for path in paths])
         rewards = np.array([path["rewards"] for path in paths])
@@ -97,5 +99,5 @@ class Seq2SeqMetaSamplerProcessor(SampleProcessor):
         advantages = np.array([path["advantages"] for path in paths])
         finish_time = np.array([path["finish_time"] for path in paths])
         
-        return observations, actions,logits, rewards, returns, values, advantages, finish_time
+        return observations, adjs, actions, logits, rewards, returns, values, advantages, finish_time
 

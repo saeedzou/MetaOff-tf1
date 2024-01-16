@@ -38,17 +38,17 @@ class MetaIterativeEnvExecutor(object):
         all_results = [env.step(a) for (a, env) in zip(actions, self.envs)]
 
         # stack results split to obs, rewards, ...
-        obs, rewards, dones, env_infos = list(map(list, zip(*all_results)))
+        obs, adjs, rewards, dones, env_infos = list(map(list, zip(*all_results)))
 
         # reset env when done or max_path_length reached
         dones = np.asarray(dones)
         self.ts += 1
         dones = np.logical_or(self.ts >= self.max_path_length, dones)
         for i in np.argwhere(dones).flatten():
-            obs[i] = self.envs[i].reset()
+            obs[i], adjs[i] = self.envs[i].reset()
             self.ts[i] = 0
 
-        return obs, rewards, dones, env_infos
+        return obs, adjs, rewards, dones, env_infos
 
     def set_tasks(self, tasks):
         """
@@ -69,9 +69,10 @@ class MetaIterativeEnvExecutor(object):
         Returns:
             (list): list of (np.ndarray) with the new initial observations.
         """
-        obses = [env.reset() for env in self.envs]
+        obses = [env.reset()[0] for env in self.envs]
+        adjs = [env.reset()[1] for env in self.envs]
         self.ts[:] = 0
-        return obses
+        return obses, adjs
 
     @property
     def num_envs(self):

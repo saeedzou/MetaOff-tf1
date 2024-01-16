@@ -41,6 +41,7 @@ class PPO():
         self.old_logits = tf.placeholder(dtype=tf.float32, shape=[None, None, self.policy.action_dim])
         self.actions = self.policy.decoder_targets
         self.obs = self.policy.obs
+        self.adjs = self.policy.adjs
         self.vpred = self.policy.vf
         self.decoder_full_length = self.policy.decoder_full_length
 
@@ -91,6 +92,7 @@ class PPO():
                     (np.zeros(task_samples['actions'].shape[0], dtype=np.int32), task_samples['actions'][:, 0:-1]))
 
         observations_batchs = np.split(np.array(task_samples['observations']), batch_number)
+        adjs_batchs = np.split(np.array(task_samples['adjs']), batch_number)
         actions_batchs = np.split(np.array(task_samples['actions']), batch_number)
         shift_action_batchs = np.split(np.array(shift_actions), batch_number)
 
@@ -106,11 +108,11 @@ class PPO():
         # copy_policy.set_weights(self.policy.get_weights())
         for i in range(self.num_inner_grad_steps):
             # action, old_logits, _ = copy_policy(observations)
-            for old_logits, old_v, observations, actions, shift_actions, advs, r in zip(old_logits_batchs, oldvpred, observations_batchs, actions_batchs,
+            for old_logits, old_v, observations, adjs, actions, shift_actions, advs, r in zip(old_logits_batchs, oldvpred, observations_batchs, adjs_batchs, actions_batchs,
                                                                                         shift_action_batchs, advs_batchs, returns):
                 decoder_full_length = np.array([observations.shape[1]] * observations.shape[0], dtype=np.int32)
 
-                feed_dict = {self.old_logits: old_logits, self.old_v: old_v, self.obs: observations, self.actions: actions,
+                feed_dict = {self.old_logits: old_logits, self.old_v: old_v, self.obs: observations, self.adjs:adjs, self.actions: actions,
                             self.decoder_inputs: shift_actions, self.decoder_full_length: decoder_full_length, self.advs: advs, self.r: r}
 
                 _, value_loss, policy_loss = sess.run([self._train, self.vf_loss, self.surr_obj], feed_dict=feed_dict)
