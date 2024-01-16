@@ -1,12 +1,13 @@
 import os
 import joblib
+import math
 
 import numpy as np
 import tensorflow as tf
 import policies.model_helper as model_helper
 
 from tensorflow.python.ops import control_flow_ops
-from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import math_ops, random_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.ops.distributions import categorical
 from policies.distributions.categorical_pd import CategoricalPd
@@ -14,6 +15,44 @@ import utils as U
 from utils.utils import zipsame
 
 tf.get_logger().setLevel('WARNING')
+
+class CustomGraphLayer():
+    """Custom Graph Layer similar to Graph2Seq"""
+    def __init__(self, in_features, out_features, k_hops=3, activation='relu'):
+        self.in_features = in_features
+        self.out_features = out_features
+        self.k_hops = k_hops
+        self.activation = activation
+        initializer = tf.glorot_normal_initializer()
+        self.embedding = tf.Variable(initializer([in_features, out_features]), name='initial_embedding', dtype=tf.float32)
+        # k+1 layers
+        self.layers = []
+        for i in range(self.k_hops+1):
+            self.layers.append(tf.Variable(initializer([out_features * 2, out_features]), name='layer_'+str(i), dtype=tf.float32))
+        
+    def call(self, x, adj):
+        # initial embedding
+        x = tf.matmul(x, self.embedding)
+        x_f = x
+        x_b = x
+        adj_b = tf.transpose(adj, perm=[0, 2, 1])
+        for k in range(self.k_hops):
+            x_f_prime = tf.matmul(adj, x_f) / tf.reduce_sum(adj, axis=-1, keepdims=True)
+            x_f_prime = tf.concat([x_f_prime, x_f], axis=-1)
+            x_f = tf.matmul(x_f_prime, self.layers[k])
+            if self.activation == 'relu':
+                x_f = tf.nn.relu(x_f)
+            
+            x_b_prime = tf.matmul(adj_b, x_b) / tf.reduce_sum(adj_b, axis=-1, keepdims=True)
+            x_b_prime = tf.concat([x_b_prime, x_b], axis=-1)
+            x_b = tf.matmul(x_b_prime, self.layers[k])
+            if self.activation == 'relu':
+                x_b = tf.nn.relu(x_b)
+        
+        x = tf.concat([x_f, x_b], axis=-1)
+        x = tf.matmul(x, self.layers[-1])
+        return x
+
 
 class FixedSequenceLearningSampleEmbedingHelper(tf.contrib.seq2seq.SampleEmbeddingHelper):
     def __init__(self, sequence_length, embedding, start_tokens, end_token, softmax_temperature=None, seed=None):
@@ -64,6 +103,7 @@ class Seq2SeqNetwork():
     def __init__(self, name,
                  hparams, reuse,
                  encoder_inputs,
+                 encoder_adjs,
                  decoder_inputs,
                  decoder_full_length,
                  decoder_targets):
@@ -89,6 +129,7 @@ class Seq2SeqNetwork():
         self.end_token = hparams.end_token
 
         self.encoder_inputs = encoder_inputs
+        self.encoder_adjs = encoder_adjs
         self.decoder_inputs = decoder_inputs
         self.decoder_targets = decoder_targets
 
@@ -101,10 +142,17 @@ class Seq2SeqNetwork():
                  self.encoder_hidden_unit],
                 -1.0, 1.0), dtype=tf.float32, name='decoder_embeddings')
 
-            # using a fully connected layer as embeddings
-            self.encoder_embeddings = tf.contrib.layers.fully_connected(self.encoder_inputs,
+            # encoder inputs shape [batch_size, num_nodes, 18]
+            # encoder adjs shape [batch_size, num_nodes, num_nodes]
+            # pass encoder_inputs[:, :, 0:6] and encoder_adjs to CustomGraphLayer
+            # concat the output of CustomGraphLayer and encoder_inputs[:, :, 6:18]
+            # then pass the output to fully connected layer
+            self.graph_layer = CustomGraphLayer(in_features=6, out_features=self.encoder_hidden_unit//2, k_hops=3, activation='relu')
+            self.graph_embeddings = self.graph_layer.call(self.encoder_inputs[:, :, :6], self.encoder_adjs)
+            self.point_embeddings = tf.concat([self.graph_embeddings, self.encoder_inputs[:, :, 6:]], axis=-1)
+            self.encoder_embeddings = tf.contrib.layers.fully_connected(self.point_embeddings,
                                                                         self.encoder_hidden_unit,
-                                                                        activation_fn = None,
+                                                                        activation_fn=None,
                                                                         scope="encoder_embeddings",
                                                                         reuse=tf.compat.v1.AUTO_REUSE)
 
@@ -363,6 +411,7 @@ class Seq2SeqPolicy():
         self.decoder_targets = tf.compat.v1.placeholder(shape=[None, None], dtype=tf.int32, name="decoder_targets_ph_"+name)
         self.decoder_inputs = tf.compat.v1.placeholder(shape=[None, None], dtype=tf.int32, name="decoder_inputs_ph"+name)
         self.obs = tf.compat.v1.placeholder(shape=[None, None, obs_dim], dtype=tf.float32, name="obs_ph"+name)
+        self.adjs = tf.compat.v1.placeholder(shape=[None, None, None], dtype=tf.float32, name="adjs_ph"+name)
         self.decoder_full_length = tf.compat.v1.placeholder(shape=[None], dtype=tf.int32, name="decoder_full_length"+name)
 
         self.action_dim = vocab_size
@@ -370,6 +419,7 @@ class Seq2SeqPolicy():
 
         self.network = Seq2SeqNetwork( hparams = hparams, reuse=tf.compat.v1.AUTO_REUSE,
                  encoder_inputs=self.obs,
+                 encoder_adjs=self.adjs,
                  decoder_inputs=self.decoder_inputs,
                  decoder_full_length=self.decoder_full_length,
                  decoder_targets=self.decoder_targets,name = name)
@@ -378,15 +428,15 @@ class Seq2SeqPolicy():
 
         self._dist = CategoricalPd(vocab_size)
 
-    def get_actions(self, observations):
+    def get_actions(self, observations, adjs):
         sess = tf.compat.v1.get_default_session()
 
         decoder_full_length = np.array( [observations.shape[1]] * observations.shape[0] , dtype=np.int32)
-
+        
         actions, logits, v_value = sess.run([self.network.sample_decoder_prediction,
                                              self.network.sample_decoder_logits,
                                              self.network.sample_vf],
-                                            feed_dict={self.obs: observations, self.decoder_full_length: decoder_full_length})
+                                            feed_dict={self.obs: observations, self.decoder_full_length: decoder_full_length, self.adjs: adjs})
 
         return actions, logits, v_value
 
@@ -457,14 +507,14 @@ class MetaSeq2SeqPolicy():
         self._dist = CategoricalPd(vocab_size)
 
 
-    def get_actions(self, observations):
+    def get_actions(self, observations, adjs):
         assert len(observations) == self.meta_batch_size
 
         meta_actions = []
         meta_logits = []
         meta_v_values = []
-        for i, obser_per_task in enumerate(observations):
-            action, logits, v_value = self.meta_policies[i].get_actions(obser_per_task)
+        for i, (obser_per_task, adjs_per_task) in enumerate(zip(observations, adjs)):
+            action, logits, v_value = self.meta_policies[i].get_actions(obser_per_task, adjs_per_task)
 
             meta_actions.append(np.array(action))
             meta_logits.append(np.array(logits))

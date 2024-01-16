@@ -246,19 +246,17 @@ class OffloadingEnvironment(MetaEnv):
                 task_encode = np.array(task_graph.encode_point_sequence_with_ranking_and_cost(scheduling_sequence, self.resource_cluster, normalize=False), dtype=np.float32)
             elif encoding == 'rank_cost_norm':
                 task_encode = np.array(task_graph.encode_point_sequence_with_ranking_and_cost(scheduling_sequence, self.resource_cluster, normalize=True), dtype=np.float32)
+            elif encoding == 'graph':
+                task_encode = np.array(task_graph.encode_point_sequence_for_graph(scheduling_sequence, self.resource_cluster, normalize=False), dtype=np.float32)
+            elif encoding == 'graph_norm':
+                task_encode = np.array(task_graph.encode_point_sequence_for_graph(scheduling_sequence, self.resource_cluster, normalize=True), dtype=np.float32)
             else:
                 raise ValueError("Encoding method {} is not supported".format(encoding))
             adjacency_matrix = task_graph.dependency
             adjacency_matrix = adjacency_matrix.astype(np.float32)
+            adjacency_matrix[adjacency_matrix > 0] = 1.0
             permutation = np.eye(adjacency_matrix.shape[0], dtype=np.float32)[scheduling_sequence]
             adjacency_matrix = permutation @ adjacency_matrix @ permutation.T
-            # normalize the adjacency matrix
-            degree_matrix = np.array(adjacency_matrix.sum(1))
-            degree_matrix = np.power(degree_matrix, -0.5).flatten()
-            degree_matrix[np.isinf(degree_matrix)] = 0.0
-            degree_matrix[np.isnan(degree_matrix)] = 0.0
-            degree_matrix = np.diag(degree_matrix)
-            adjacency_matrix = degree_matrix @ adjacency_matrix @ degree_matrix
             encoder_dependencies.append(adjacency_matrix)
             encoder_list.append(task_encode)
 
